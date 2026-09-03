@@ -141,3 +141,12 @@ real data in their original form. Three separate bugs, each hiding the next:
 
 Worth replaying a recorded CSV against any new thresholds before reaching for the phone; that
 is how the 35 cm gate was validated.
+
+## License
+
+Apache License 2.0 — see [LICENSE](LICENSE) and [NOTICE](NOTICE).
+
+Apache 2.0 rather than MIT for the express patent grant, which matters more than
+usual here: the app is essentially a technique — driving zoom from autofocus distance —
+in a patent-dense corner of the camera and AR space. It also matches every dependency,
+all of which are Apache 2.0.
