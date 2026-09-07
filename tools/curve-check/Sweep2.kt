@@ -1,7 +1,11 @@
 import com.pobox.magicmagnifier.MagnificationCurve
+
 import com.pobox.magicmagnifier.OneEuroFilter
 import com.pobox.magicmagnifier.ZoomController
 import kotlin.random.Random
+
+/** The curve as fitted to the phone these constants were tuned on. */
+val CURVE = MagnificationCurve(nearestFocusMetres = 0.10f, maxZoomRatio = 10f)
 
 class Med5 {
     private val w = FloatArray(5); private var n = 0; private var i = 0
@@ -12,12 +16,12 @@ class Med5 {
 fun approachFrac(rate: Float): Pair<Float, Float> {
     val f = OneEuroFilter(0.6f, 10f); val m = Med5()
     val zc = ZoomController(maxRatioPerSecond = rate); zc.reset(1f)
-    var t = 0L; val move = 45; val target = MagnificationCurve.zoomFor(0.10f)
+    var t = 0L; val move = 45; val target = CURVE.zoomFor(0.10f)
     var atStop = 0f; var settle = -1
     repeat(move + 90) { i ->
         t += 33_000_000L
         val raw = if (i < move) 0.50f + (0.10f - 0.50f) * (i/(move-1f)) else 0.10f
-        zc.next(MagnificationCurve.zoomFor(f.filter(m.push(raw), t)), t, 1f, 16f)
+        zc.next(CURVE.zoomFor(f.filter(m.push(raw), t)), t, 1f, 16f)
         if (i == move-1) atStop = zc.current
         if (i >= move && settle < 0 && zc.current >= target*0.95f) settle = i - move
     }
@@ -42,7 +46,7 @@ fun restWrites(rate: Float): Int {
     var t = 0L; var w = 0
     repeat(300) { i -> t += 33_000_000L
         val d = m.push(0.20f + (rng.nextFloat()-0.5f)*0.02f)
-        if (zc.next(MagnificationCurve.zoomFor(f.filter(d,t)), t, 1f, 16f) != null && i>=60) w++ }
+        if (zc.next(CURVE.zoomFor(f.filter(d,t)), t, 1f, 16f) != null && i>=60) w++ }
     return w
 }
 

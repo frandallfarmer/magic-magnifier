@@ -51,6 +51,9 @@ class CameraEngine(
     private var ticker: ScheduledExecutorService? = null
 
     private val estimator = DistanceEstimator()
+
+    /** Built once the camera has told us how close it focuses and how far it zooms. */
+    @Volatile private var curve = MagnificationCurve(Float.POSITIVE_INFINITY, 1f)
     private val zoomController = ZoomController()
     private val autoTorch = AutoTorch()
 
@@ -269,10 +272,19 @@ class CameraEngine(
 
         val z = camera?.cameraInfo?.zoomState?.value
         zoomController.reset(startAt = z?.zoomRatio ?: 1f)
+
+        // Fit the curve to what this camera can actually do. Hardcoding the range would waste
+        // most of it: the original fixed table spent its top half below this phone's focus
+        // wall, capping magnification at less than half the available zoom.
+        curve = MagnificationCurve(
+            nearestFocusMetres = profile.minFocusMetres,
+            maxZoomRatio = z?.maxZoomRatio ?: 1f,
+        )
         Telemetry.logLine(
             "bound ${profile.cameraId} zoom=${z?.minZoomRatio}..${z?.maxZoomRatio} " +
                 "calibration=${profile.calibration}"
         )
+        Telemetry.logLine("curve fitted: $curve")
     }
 
     private fun stabilizationMode(profile: LensProfile): Int? {
@@ -333,7 +345,7 @@ class CameraEngine(
 
         if (maybeSwitchLens(currentPlan, estimate.metres)) return
 
-        val target = MagnificationCurve.zoomFor(estimate.metres)
+        val target = curve.zoomFor(estimate.metres)
         val applied = zoomController.next(
             target = target,
             nowNanos = now,

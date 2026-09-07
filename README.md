@@ -57,6 +57,13 @@ LENS_FOCUS_DISTANCE (per frame, diopters)
   -> CameraControl.setZoomRatio        at 15Hz
 ```
 
+**The curve is fitted to the phone, not hardcoded.** `SHAPE` holds hand-tuned proportions; the
+endpoints come from the device — the near end from `LENS_INFO_MINIMUM_FOCUS_DISTANCE`, the top
+from the reported maximum zoom ratio. So the curvature you would tune by feel survives, while
+the range adapts. One binary suits any phone, and each gets its full usable travel instead of
+spending half the curve past a focus wall it cannot see through. A fixed-focus camera, which
+gives no distance signal at all, correctly stays at 1x.
+
 Two things beyond sensing shape the design:
 
 - **Magnification compounds.** Moving closer already magnifies optically, so apparent on-screen
@@ -97,9 +104,11 @@ Two loops, and they are different jobs.
 JVM with no phone attached:
 
 ```bash
-tools/curve-check/run.sh          # correctness and feel checks
-tools/curve-check/run.sh Sweep    # 1-Euro minCutoff/beta vs rest stability and tracking
-tools/curve-check/run.sh Sweep2   # zoom rate limit vs tracking and autofocus-step absorption
+tools/curve-check/run.sh           # correctness and feel checks
+tools/curve-check/run.sh Fit       # the curve each device would get, and how much it can reach
+tools/curve-check/run.sh Sweep     # 1-Euro minCutoff/beta vs rest stability and tracking
+tools/curve-check/run.sh Sweep2    # zoom rate limit vs tracking and autofocus-step absorption
+tools/curve-check/run.sh Deadband  # deadband vs stillness at rest
 ```
 
 Worth knowing when touching the filter: `beta` is in Hz per (metre/second). Textbook 1-Euro
@@ -115,7 +124,7 @@ adb pull /sdcard/Android/data/com.pobox.magicmagnifier/files/     # telemetry CS
 
 The startup block prints the focus calibration mode, minimum focus distance, zoom range and
 physical camera list — read it first, because whether the device is calibrated decides whether
-`MagnificationCurve.ANCHORS` is expressed in real centimetres or in that device's own units.
+`MagnificationCurve.SHAPE` is expressed in real centimetres or in that device's own units.
 
 Then hold the phone at measured distances (50, 30, 20, 12, 8, 4 cm) against a textured target
 and confirm from the CSV that the filtered value moves monotonically and repeatably. If it is
@@ -141,12 +150,12 @@ Its lenses:
 
 Two things worth knowing before changing anything:
 
-**Magnification tops out at 4.8x, at 10 cm.** That is the main camera's close-focus wall, and
-measured runs hit it exactly. The curve's anchors below 10 cm are unreachable here, so roughly
-half its range is dead on this device while the hardware still offers 10x zoom. Rescaling
-`ANCHORS` onto the reachable 50–10 cm band is the obvious next move; the thing to watch when
-doing it is whether the framework hands over to the tele lenses, which cannot focus nearer than
-40 cm. It did not do so up to 4.8x, but 10x is where it would most plausibly try.
+**The close-focus wall is at 10 cm**, and measured runs hit it exactly. This is what drove the
+curve to be fitted per device rather than hardcoded. A fixed table running to 2 cm and 15x
+spent its whole top half beyond this camera's focus wall, so magnification stopped at 4.8x
+while the hardware offered 10x — less than half the range was usable. The fitted curve spans
+50–11 cm and 1–10x instead, and reaches the full 10x in focus. Measured on device at 15 cm:
+7.2x, against 3.3x under the old table.
 
 **The ultra-wide is a worse macro lens than it looks.** It focuses to 5 cm, but magnification
 goes as focal length over distance, so 2.2 mm at 5 cm is optically *worse* than 6.3 mm at

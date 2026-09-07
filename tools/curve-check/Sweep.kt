@@ -1,8 +1,12 @@
 import com.pobox.magicmagnifier.MagnificationCurve
+
 import com.pobox.magicmagnifier.OneEuroFilter
 import com.pobox.magicmagnifier.ZoomController
 import kotlin.math.abs
 import kotlin.random.Random
+
+/** The curve as fitted to the phone these constants were tuned on. */
+val CURVE = MagnificationCurve(nearestFocusMetres = 0.10f, maxZoomRatio = 10f)
 
 // Mirrors DistanceEstimator's upstream median-of-5 so the sweep sees the same signal
 // the filter will actually get on device.
@@ -21,7 +25,7 @@ fun restWrites(minCutoff: Float, beta: Float): Int {
     repeat(300) { i ->
         t += 33_000_000L
         val d = m.push(0.20f + (rng.nextFloat() - 0.5f) * 0.02f)
-        if (zc.next(MagnificationCurve.zoomFor(f.filter(d, t)), t, 1f, 16f) != null && i >= 60) writes++
+        if (zc.next(CURVE.zoomFor(f.filter(d, t)), t, 1f, 16f) != null && i >= 60) writes++
     }
     return writes
 }
@@ -31,14 +35,14 @@ fun approach(minCutoff: Float, beta: Float): Pair<Float, Float> {
     val f = OneEuroFilter(minCutoff, beta); val m = Median5(); val zc = ZoomController(); zc.reset(1f)
     var t = 0L
     val move = 45
-    val target = MagnificationCurve.zoomFor(0.10f)
+    val target = CURVE.zoomFor(0.10f)
     var atStop = 0f
     var settleFrame = -1
     repeat(move + 90) { i ->
         t += 33_000_000L
         val raw = if (i < move) 0.50f + (0.10f - 0.50f) * (i / (move - 1f)) else 0.10f
         val d = m.push(raw)
-        zc.next(MagnificationCurve.zoomFor(f.filter(d, t)), t, 1f, 16f)
+        zc.next(CURVE.zoomFor(f.filter(d, t)), t, 1f, 16f)
         if (i == move - 1) atStop = zc.current
         if (i >= move && settleFrame < 0 && zc.current >= target * 0.95f) settleFrame = i - move
     }

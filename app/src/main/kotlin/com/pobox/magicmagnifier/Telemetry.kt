@@ -13,7 +13,7 @@ import java.util.concurrent.Executors
  * The app has no interface, so this is the only way to see what it is thinking.
  *
  * Everything goes to logcat under a single tag plus a CSV in the app's external files dir,
- * for fitting [MagnificationCurve.ANCHORS] to a specific device offline. Debug builds only.
+ * for refitting [MagnificationCurve.SHAPE] to a specific device offline. Debug builds only.
  *
  *   adb logcat -s MagMag
  *   adb pull /sdcard/Android/data/com.pobox.magicmagnifier/files/magmag-*.csv

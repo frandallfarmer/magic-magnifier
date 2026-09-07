@@ -1,8 +1,12 @@
 import com.pobox.magicmagnifier.MagnificationCurve
+
 import com.pobox.magicmagnifier.OneEuroFilter
 import com.pobox.magicmagnifier.ZoomController
 import kotlin.math.abs
 import kotlin.random.Random
+
+/** The curve as fitted to the phone these constants were tuned on. */
+val CURVE = MagnificationCurve(nearestFocusMetres = 0.10f, maxZoomRatio = 10f)
 
 /** Mirrors DistanceEstimator's upstream median-of-5 so checks see the real signal path. */
 class Median5 {
@@ -23,7 +27,7 @@ fun main() {
     var prevZ = -1f; var prevApparent = -1f; var monoZ = true; var monoApparent = true
     var worstRatio = 0f
     for (d in ds) {
-        val z = MagnificationCurve.zoomFor(d)
+        val z = CURVE.zoomFor(d)
         val apparent = z / d
         println("   d=%6.3f m  zoom=%6.2fx  apparent=%8.1f".format(d, z, apparent))
         if (prevZ >= 0f) {
@@ -35,15 +39,16 @@ fun main() {
     }
     check("zoom increases monotonically as distance shrinks", monoZ)
     check("apparent size increases monotonically (never shrinks when moving closer)", monoApparent)
-    check("clamped at the far end", MagnificationCurve.zoomFor(5f) == 1.0f)
-    check("clamped at the near end", MagnificationCurve.zoomFor(0.005f) == 15.0f)
+    check("clamped at the far end", CURVE.zoomFor(5f) == 1.0f)
+    // The near end is now the device's own maximum rather than a hardcoded 15x.
+    check("clamped at the near end to the device max", CURVE.zoomFor(0.005f) == 10.0f)
 
     println("\n== curve continuity: no jumps between anchors ==")
     var maxStep = 0f
     var d = 0.5f
     while (d > 0.02f) {
-        val a = MagnificationCurve.zoomFor(d)
-        val b = MagnificationCurve.zoomFor(d * 0.99f)
+        val a = CURVE.zoomFor(d)
+        val b = CURVE.zoomFor(d * 0.99f)
         maxStep = maxOf(maxStep, abs(b / a))
         d *= 0.99f
     }
@@ -111,7 +116,7 @@ fun main() {
         te += 33_000_000L
         val held = med.push(0.20f + (n2.nextFloat() - 0.5f) * 0.02f)   // +-1cm of focus jitter
         val smoothed = fe.filter(held, te)
-        val z = MagnificationCurve.zoomFor(smoothed)
+        val z = CURVE.zoomFor(smoothed)
         if (zce.next(z, te, 1f, 16f) != null) {
             if (i < 60) settleWrites++ else writesAtRest++
         }
@@ -130,9 +135,9 @@ fun main() {
         ta += 33_000_000L
         val d = 0.50f + (0.10f - 0.50f) * (i / (frames - 1f))
         val smoothed = fa.filter(d, ta)
-        zca.next(MagnificationCurve.zoomFor(smoothed), ta, 1f, 16f)
+        zca.next(CURVE.zoomFor(smoothed), ta, 1f, 16f)
     }
-    val wanted = MagnificationCurve.zoomFor(0.10f)
+    val wanted = CURVE.zoomFor(0.10f)
     val reached = zca.current
     // The zoom deliberately trails a little during the move and catches up on arrival;
     // pinning it to the hand frame-for-frame is what makes these apps feel twitchy.
@@ -146,7 +151,7 @@ fun main() {
     repeat(frames + 90) { i ->
         th += 33_000_000L
         val d = if (i < frames) 0.50f + (0.10f - 0.50f) * (i / (frames - 1f)) else 0.10f
-        zch.next(MagnificationCurve.zoomFor(fh.filter(medh.push(d), th)), th, 1f, 16f)
+        zch.next(CURVE.zoomFor(fh.filter(medh.push(d), th)), th, 1f, 16f)
         if (i >= frames && settleFrames < 0 && zch.current >= wanted * 0.95f) settleFrames = i - frames
     }
     val settleS = settleFrames * 0.033f
