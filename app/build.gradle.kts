@@ -9,7 +9,9 @@ android {
 
     defaultConfig {
         applicationId = "com.pobox.magicmagnifier"
-        minSdk = 28
+        // Android 10. MediaStore writes need no permission from here up, which keeps the
+        // app to exactly one system dialog in its life -- see SnapshotStore.
+        minSdk = 29
         targetSdk = 35
         versionCode = 1
         versionName = "0.1"

@@ -4,8 +4,6 @@ A live magnifier with no controls. Point it at something; the closer you get, th
 magnifies. Distance to whatever sits in the middle of the frame is the only input. Once
 running the screen is nothing but video — no buttons, no text, no overlays.
 
-## How it decides how much to magnify
-
 Autofocus does not measure distance. It drives a lens to maximise contrast or phase agreement
 and reports a *lens position*. Android's Camera2 exposes that as `LENS_FOCUS_DISTANCE` in
 diopters, which is only physically meaningful when `LENS_INFO_FOCUS_DISTANCE_CALIBRATION`
@@ -16,6 +14,31 @@ That turns out not to matter. The app never needs metres — it needs a signal t
 *monotonic and repeatable* in distance on one device, and focus distance is that even when
 uncalibrated. Distances are therefore treated as **nominal metres** throughout, and the
 magnification curve is refitted per device from telemetry when the hardware is uncalibrated.
+
+## Taking a snapshot
+
+There is no shutter button, and a single tap is out of the question -- at 5x a palm brushing
+the glass would fire it constantly. The gesture is summoned instead:
+
+1. **Touch anywhere.** A black-and-white ring appears under your finger and starts to fade.
+2. **Touch inside that ring** while it is still visible. The shutter clicks, the ring pulses
+   once and is gone. The image lands in `Pictures/Magic Magnifier`, at full capture
+   resolution, framed exactly as it was on screen.
+3. **Or don't.** Let the ring fade -- about three seconds -- and nothing happened.
+
+Because the confirming touch is anchored to a place, an accidental brush cannot reach it: it
+would have to land twice, in the same spot, inside the window. A touch that misses the ring
+re-arms at the new point rather than doing nothing.
+
+The ring is two adjacent opaque bands, one white and one black. That is not decoration. The
+app has no idea what is behind it -- white paper, black text, a bright screen -- and a
+single-colour ring vanishes against its own colour exactly when it is needed. With two bands
+touching, one of them always contrasts.
+
+Nothing about this reaches the saved file: the ring lives in the view hierarchy, the image
+comes from the camera.
+
+## How it decides how much to magnify
 
 The signal path:
 
@@ -41,7 +64,9 @@ Two things beyond sensing shape the design:
 
 ## Build and install
 
-Needs JDK 17 and an Android SDK; `local.properties` points at the latter.
+Needs JDK 17 and an Android SDK; `local.properties` points at the latter. Android 10 (API 29)
+or newer -- `MediaStore` needs no permission from there up, which keeps the app to exactly one
+system dialog in its life, the camera prompt on first launch.
 
 ```bash
 export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64

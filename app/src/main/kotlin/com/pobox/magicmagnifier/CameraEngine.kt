@@ -6,6 +6,7 @@ import android.hardware.camera2.CameraMetadata
 import android.hardware.camera2.CaptureRequest
 import android.hardware.camera2.params.MeteringRectangle
 import android.os.Build
+import android.net.Uri
 import android.os.SystemClock
 import android.util.Log
 import androidx.annotation.OptIn
@@ -15,7 +16,10 @@ import androidx.camera.camera2.interop.ExperimentalCamera2Interop
 import androidx.camera.core.Camera
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
+import androidx.camera.core.ImageCapture
+import androidx.camera.core.ImageCaptureException
 import androidx.camera.core.Preview
+import androidx.camera.core.UseCaseGroup
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
@@ -52,6 +56,8 @@ class CameraEngine(
 
     private var provider: ProcessCameraProvider? = null
     private var camera: Camera? = null
+    private var imageCapture: ImageCapture? = null
+    private var viewPortRetries = 0
     private var plan: LensPlan? = null
 
     @Volatile private var latestEstimate = DistanceEstimate(10f, confident = false)
@@ -70,6 +76,44 @@ class CameraEngine(
         }, mainExecutor)
     }
 
+    /**
+     * Capture what is on screen right now, full resolution, into the gallery.
+     *
+     * Called from the shutter gesture's touch-down rather than touch-up: at 5x the tap itself
+     * shakes the frame, so every millisecond between finger contact and shutter is blur.
+     *
+     * @param onResult the saved image, or null if it failed. There is no interface to report a
+     *   failure into, so the caller's job is mainly to withhold the shutter click.
+     */
+    fun takeSnapshot(onResult: (Uri?) -> Unit) {
+        val capture = imageCapture
+        if (capture == null) {
+            Telemetry.logLine("snapshot requested before the camera was ready")
+            onResult(null)
+            return
+        }
+        val requestedAt = SystemClock.elapsedRealtime()
+        capture.takePicture(
+            SnapshotStore.outputOptions(context),
+            mainExecutor,
+            object : ImageCapture.OnImageSavedCallback {
+                override fun onImageSaved(output: ImageCapture.OutputFileResults) {
+                    val ms = SystemClock.elapsedRealtime() - requestedAt
+                    Telemetry.logLine(
+                        "snapshot saved in ${ms}ms at ${"%.2f".format(zoomController.current)}x: " +
+                            "${output.savedUri}"
+                    )
+                    onResult(output.savedUri)
+                }
+
+                override fun onError(exc: ImageCaptureException) {
+                    Log.e(Telemetry.TAG, "snapshot failed", exc)
+                    onResult(null)
+                }
+            },
+        )
+    }
+
     /** Terminal: the activity builds a fresh engine on resume, so release the threads. */
     fun stop() {
         ticker?.shutdownNow()
@@ -77,6 +121,7 @@ class CameraEngine(
         analysisExecutor.shutdownNow()
         provider?.unbindAll()
         camera = null
+        imageCapture = null
         estimator.reset()
         zoomController.reset()
         autoTorch.reset()
@@ -183,8 +228,44 @@ class CameraEngine(
             .build()
             .also { it.setAnalyzer(analysisExecutor, ::analyse) }
 
+        // Zoom is applied through CameraControl, so it reaches this use case too: a snapshot
+        // comes out magnified exactly as the screen showed it, at full capture resolution
+        // rather than the preview's. Flash stays off because AutoTorch already owns the light.
+        val capture = ImageCapture.Builder()
+            .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
+            .setFlashMode(ImageCapture.FLASH_MODE_OFF)
+            .build()
+        imageCapture = capture
+
+        // Bind everything through one ViewPort so the use cases share a field of view.
+        //
+        // Without this the snapshot is not what you saw. The preview crops the sensor's 4:3
+        // output to fill a tall phone screen, but ImageCapture happily saves the whole 4:3
+        // frame -- so you magnify a word, take a picture of it, and get the entire desk. The
+        // viewport comes from PreviewView itself, so the crop is matched by construction
+        // rather than by us recomputing an aspect ratio and hoping.
+        val viewPort = previewView.viewPort
+        if (viewPort == null && viewPortRetries < MAX_VIEWPORT_RETRIES) {
+            // The view has not been laid out yet, so it cannot describe its own crop. Try
+            // again on the next pass rather than silently binding a mismatched capture.
+            viewPortRetries++
+            previewView.post { bind(selector, profile) }
+            return
+        }
+        if (viewPort == null) {
+            Log.w(Telemetry.TAG, "no viewport after $viewPortRetries tries; snapshots will be wider than the preview")
+        }
+        viewPortRetries = 0
+
+        val group = UseCaseGroup.Builder()
+            .addUseCase(preview)
+            .addUseCase(analysis)
+            .addUseCase(capture)
+            .apply { viewPort?.let { setViewPort(it) } }
+            .build()
+
         p.unbindAll()
-        camera = p.bindToLifecycle(lifecycleOwner, selector, preview, analysis)
+        camera = p.bindToLifecycle(lifecycleOwner, selector, group)
 
         val z = camera?.cameraInfo?.zoomState?.value
         zoomController.reset(startAt = z?.zoomRatio ?: 1f)
@@ -323,6 +404,7 @@ class CameraEngine(
 
     private companion object {
         const val ZOOM_HZ = 15L
+        const val MAX_VIEWPORT_RETRIES = 5
         const val CENTRE_FRACTION = 0.15f
         const val SWITCH_HYSTERESIS = 1.35f
     }

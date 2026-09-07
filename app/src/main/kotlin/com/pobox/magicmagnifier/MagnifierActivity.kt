@@ -3,7 +3,12 @@ package com.pobox.magicmagnifier
 import android.Manifest
 import android.content.pm.PackageManager
 import android.graphics.Color
+import android.media.MediaActionSound
+import android.net.Uri
+import android.os.Build
 import android.os.Bundle
+import android.view.HapticFeedbackConstants
+import android.view.MotionEvent
 import android.view.ViewGroup
 import android.view.WindowManager
 import android.widget.FrameLayout
@@ -23,6 +28,10 @@ import androidx.core.view.WindowInsetsControllerCompat
  * frame is the only input the app takes. The single unavoidable exception to "all video" is
  * Android's own camera permission dialog on first launch; it is system UI and cannot be
  * suppressed, and it is never seen again once granted.
+ *
+ * The one exception to "no controls" is the snapshot gesture, and it is summoned rather than
+ * shown: touch anywhere to raise a ring, touch inside the ring to capture. Let it fade and
+ * nothing happened. See [ShutterTarget].
  */
 class MagnifierActivity : ComponentActivity() {
 
@@ -30,6 +39,11 @@ class MagnifierActivity : ComponentActivity() {
 
     /** Holds the last good frame over a lens change, so the swap reads as a dissolve. */
     private lateinit var freezeFrame: ImageView
+
+    /** The summoned shutter ring; invisible until touched, gone again three seconds later. */
+    private lateinit var shutterTarget: ShutterTarget
+
+    private var shutterSound: MediaActionSound? = null
 
     private var engine: CameraEngine? = null
     private var started = false
@@ -65,12 +79,23 @@ class MagnifierActivity : ComponentActivity() {
             visibility = ImageView.GONE
         }
 
+        shutterTarget = ShutterTarget(this).apply {
+            layoutParams = FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT,
+            )
+        }
+
         val root = FrameLayout(this).apply {
             setBackgroundColor(Color.BLACK)
             addView(previewView)
             addView(freezeFrame)
+            // Topmost, so the ring is never hidden behind a lens-change dissolve.
+            addView(shutterTarget)
         }
         setContentView(root)
+
+        shutterSound = MediaActionSound().apply { load(MediaActionSound.SHUTTER_CLICK) }
 
         // Drop the held frame the moment real frames are flowing again.
         previewView.previewStreamState.observe(this) { state ->
@@ -97,11 +122,61 @@ class MagnifierActivity : ComponentActivity() {
         engine?.stop()
         engine = null
         started = false
+        shutterTarget.dismiss()
     }
 
     override fun onDestroy() {
         super.onDestroy()
+        shutterSound?.release()
+        shutterSound = null
         Telemetry.stop()
+    }
+
+    /**
+     * The snapshot gesture: touch once to arm, touch inside the ring to fire.
+     *
+     * Handled here rather than in onTouchEvent so it sees ACTION_DOWN first whatever any child
+     * view decides to do with the event, and it never consumes -- the system back and edge
+     * gestures have to keep working, since they are the only way out of a fullscreen app with
+     * no interface.
+     */
+    override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
+        if (ev.actionMasked == MotionEvent.ACTION_DOWN) {
+            if (shutterTarget.isArmedAt(ev.x, ev.y)) {
+                // Fire on the way down. At 5x the tap itself shakes the frame, so the delay
+                // between contact and shutter is blur we can simply decline to add.
+                shutterTarget.flashAndDismiss()
+                confirmHaptic()
+                Telemetry.logLine("shutter fired")
+                engine?.takeSnapshot(::onSnapshotSaved)
+            } else {
+                // A miss re-arms where the finger landed rather than doing nothing. Making
+                // someone start over for an imprecise tap would be a poor trade in an app
+                // built for people who cannot see well.
+                shutterTarget.arm(ev.x, ev.y)
+                shutterTarget.performHapticFeedback(HapticFeedbackConstants.CONTEXT_CLICK)
+            }
+        }
+        return super.dispatchTouchEvent(ev)
+    }
+
+    private fun onSnapshotSaved(uri: Uri?) {
+        if (uri != null) {
+            shutterSound?.play(MediaActionSound.SHUTTER_CLICK)
+        } else {
+            // Nowhere to report a failure to, so the silence is the message: no click means
+            // nothing was saved.
+            Telemetry.logLine("shutter fired but nothing was saved")
+        }
+    }
+
+    private fun confirmHaptic() {
+        val constant = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            HapticFeedbackConstants.CONFIRM
+        } else {
+            HapticFeedbackConstants.LONG_PRESS
+        }
+        shutterTarget.performHapticFeedback(constant)
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
