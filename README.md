@@ -163,6 +163,19 @@ goes as focal length over distance, so 2.2 mm at 5 cm is optically *worse* than 
 `LensStrategy` will not switch to it here anyway, since the logical camera's sub-1.0 zoom range
 sets `frameworkHandlesCrossover`.
 
+### On handheld shake at high zoom
+
+The worry was that at high magnification the tap itself would shake the frame, and that
+`ImageCapture` needing a further 100-300ms would turn every snapshot into a blur. Two
+mitigations went in on that assumption: firing on touch-down rather than touch-up, and the
+preview stabilisation already enabled in `CameraEngine`.
+
+It has since been used in earnest, handheld, on electronic shelf price tags in a supermarket
+— small, flat, high-contrast text read at roughly 15-25cm, which is squarely where the fitted
+curve does its work — with no shake problem. Worth recording because it was a flagged risk
+rather than a measured one, and because synthetic `adb shell input tap` events cannot test it:
+they do not move the phone.
+
 ### On snapshots matching the screen
 
 Binding `ImageCapture` naively saves the sensor's whole 4:3 frame, while the preview crops it
