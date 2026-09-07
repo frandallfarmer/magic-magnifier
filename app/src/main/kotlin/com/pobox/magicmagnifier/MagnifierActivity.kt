@@ -7,6 +7,7 @@ import android.media.MediaActionSound
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.util.TypedValue
 import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
 import android.view.ViewGroup
@@ -17,6 +18,8 @@ import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
+import androidx.core.graphics.Insets
+import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -44,6 +47,9 @@ class MagnifierActivity : ComponentActivity() {
     private lateinit var shutterTarget: ShutterTarget
 
     private var shutterSound: MediaActionSound? = null
+
+    /** Logged once, the first time a touch asks, purely so the values are diagnosable. */
+    private var loggedGestureInsets = false
 
     private var engine: CameraEngine? = null
     private var started = false
@@ -97,6 +103,7 @@ class MagnifierActivity : ComponentActivity() {
 
         shutterSound = MediaActionSound().apply { load(MediaActionSound.SHUTTER_CLICK) }
 
+
         // Drop the held frame the moment real frames are flowing again.
         previewView.previewStreamState.observe(this) { state ->
             if (pendingSwitchFade && state == PreviewView.StreamState.STREAMING) {
@@ -142,6 +149,13 @@ class MagnifierActivity : ComponentActivity() {
      */
     override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
         if (ev.actionMasked == MotionEvent.ACTION_DOWN) {
+            // Leave the edges alone. A touch that starts there is on its way to being a back,
+            // home or recents gesture, and treating it as a shutter arm would put a ring on
+            // screen every time you navigated -- worse, two quick back-swipes would land the
+            // second inside the first's ring and fire the shutter.
+            if (inSystemGestureArea(ev.x, ev.y)) {
+                return super.dispatchTouchEvent(ev)
+            }
             if (shutterTarget.isArmedAt(ev.x, ev.y)) {
                 // Fire on the way down. At 5x the tap itself shakes the frame, so the delay
                 // between contact and shutter is blur we can simply decline to add.
@@ -158,6 +172,40 @@ class MagnifierActivity : ComponentActivity() {
             }
         }
         return super.dispatchTouchEvent(ev)
+    }
+
+    /**
+     * True for touches starting in the OS gesture margins.
+     *
+     * The insets come from the device, so this adapts on its own: a phone on gesture
+     * navigation reports a back-swipe strip down each side, one on three-button navigation
+     * reports none. The floor covers the case those come back as zero -- with the system bars
+     * hidden, an edge swipe still pulls them back into view, and that gesture deserves the
+     * same deference.
+     */
+    private fun inSystemGestureArea(x: Float, y: Float): Boolean {
+        val root = window.decorView
+
+        // Asked at the moment of the touch rather than cached from an OnApplyWindowInsets
+        // listener. With the system bars hidden that listener is never called on this device,
+        // which left the field permanently at zero -- the edges were being protected by the
+        // floor alone and would silently have gone unguarded had the floor ever been removed.
+        val insets = ViewCompat.getRootWindowInsets(root)
+            ?.getInsets(WindowInsetsCompat.Type.systemGestures())
+            ?: Insets.NONE
+
+        if (!loggedGestureInsets) {
+            loggedGestureInsets = true
+            Telemetry.logLine("system gesture insets: $insets (floor ${EDGE_FLOOR_DP}dp)")
+        }
+
+        val floor = TypedValue.applyDimension(
+            TypedValue.COMPLEX_UNIT_DIP, EDGE_FLOOR_DP, resources.displayMetrics,
+        )
+        return x < maxOf(insets.left.toFloat(), floor) ||
+            x > root.width - maxOf(insets.right.toFloat(), floor) ||
+            y < maxOf(insets.top.toFloat(), floor) ||
+            y > root.height - maxOf(insets.bottom.toFloat(), floor)
     }
 
     private fun onSnapshotSaved(uri: Uri?) {
@@ -254,6 +302,21 @@ class MagnifierActivity : ComponentActivity() {
     }
 
     private companion object {
+        /**
+         * Kept back from every edge regardless of what the system reports.
+         *
+         * This is load-bearing, not insurance. A Galaxy S24 Ultra on gesture navigation
+         * reports Insets{left=0, top=128, right=0, bottom=126}: generous margins top and
+         * bottom, and *nothing at all* down the sides, even though back-swipe is live on both
+         * of them. With the system bars hidden Android simply does not report the side
+         * strips, so the reported insets would leave the back gesture completely unguarded.
+         *
+         * 28dp clears Android's 24dp default back-gesture zone with a little room for the
+         * sensitivity setting, and costs about 14% of the screen width for arming -- cheap,
+         * since the ring can be summoned anywhere in the remainder.
+         */
+        const val EDGE_FLOOR_DP = 28f
+
         const val CROSSFADE_MS = 180L
         const val FREEZE_TIMEOUT_MS = 900L
     }
