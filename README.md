@@ -35,6 +35,11 @@ app has no idea what is behind it -- white paper, black text, a bright screen --
 single-colour ring vanishes against its own colour exactly when it is needed. With two bands
 touching, one of them always contrasts.
 
+Touches that start at the very edge of the screen are ignored, because they are on their way
+to being a back, home or recents gesture. Without that, a ring appeared every time you
+navigated -- and two quick back-swipes could put the second inside the first's ring and fire
+the shutter.
+
 Nothing about this reaches the saved file: the ring lives in the view hierarchy, the image
 comes from the camera.
 
@@ -148,6 +153,36 @@ goes as focal length over distance, so 2.2 mm at 5 cm is optically *worse* than 
 10 cm. After sensor-size differences it buys perhaps 20%, for a 12 MP sensor instead of 200 MP.
 `LensStrategy` will not switch to it here anyway, since the logical camera's sub-1.0 zoom range
 sets `frameworkHandlesCrossover`.
+
+### On snapshots matching the screen
+
+Binding `ImageCapture` naively saves the sensor's whole 4:3 frame, while the preview crops it
+to fill a tall screen. The result is a snapshot far wider than what you were looking at --
+measured at aspect 0.750 against the screen's 0.462, which in practice means magnifying a word
+and getting a photograph of the entire desk.
+
+The fix is to bind preview, analysis and capture together in a `UseCaseGroup` sharing one
+`ViewPort` taken from `PreviewView` itself, so the crop matches by construction instead of by
+recomputing an aspect ratio and hoping. Measured after: 0.462 against 0.462.
+
+### On the system gesture margins
+
+The reported insets are not sufficient on their own, and it takes measuring to see it. This
+device on gesture navigation reports:
+
+    Insets{left=0, top=128, right=0, bottom=126}
+
+Generous margins top and bottom, and **nothing at all down the sides** — even though
+back-swipe is live on both of them. With the system bars hidden Android does not report the
+side strips. So the 28 dp floor in `MagnifierActivity` is load-bearing rather than insurance;
+relying on the insets alone would leave the back gesture completely unguarded.
+
+Two related traps: the insets must be read at touch time, because
+`OnApplyWindowInsetsListener` is never called on this device with the bars hidden and a cached
+value stays at zero forever. And Android itself drops edge taps before delivery — a tap at
+x=12 never reaches the app, while one at x=20 does — so the app-side check is a second layer
+over protection the OS usually provides, for the devices and navigation modes where it does
+not.
 
 ### On the auto-torch thresholds
 
