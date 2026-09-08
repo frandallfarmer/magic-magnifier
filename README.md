@@ -21,9 +21,10 @@ There is no shutter button, and a single tap is out of the question -- at 5x a p
 the glass would fire it constantly. The gesture is summoned instead:
 
 1. **Touch anywhere.** A black-and-white ring appears under your finger and starts to fade.
-2. **Touch inside that ring** while it is still visible. The shutter clicks, the ring pulses
-   once and is gone. The image lands in `Pictures/Magic Magnifier`, at full capture
-   resolution, framed exactly as it was on screen.
+2. **Touch inside that ring** while it is still visible. The image stops dead, the screen
+   blinks black then white, and the captured frame is held for a moment before live resumes.
+   The file lands in `Pictures/Magic Magnifier`, at full capture resolution, framed exactly as
+   it was on screen.
 3. **Or don't.** Let the ring fade -- about three seconds -- and nothing happened.
 
 Because the confirming touch is anchored to a place, an accidental brush cannot reach it: it
@@ -34,6 +35,14 @@ The ring is two adjacent opaque bands, one white and one black. That is not deco
 app has no idea what is behind it -- white paper, black text, a bright screen -- and a
 single-colour ring vanishes against its own colour exactly when it is needed. With two bands
 touching, one of them always contrasts.
+
+The confirmation is screen-wide for a reason. It used to be the ring pulsing outward, which
+turned out to be invisible in use: the ring is centred on the touch point, so the only visual
+confirmation the app gave was underneath the finger that triggered it. The blink is black
+*then* white for the same reason the ring is two-tone -- a white flash barely registers on a
+white price tag, and a black one vanishes against a dark subject, so one phase always
+contrasts. If a save fails, two slower black-only pulses follow, which is the only way an app
+with no interface can say so.
 
 Touches that start at the very edge of the screen are ignored, because they are on their way
 to being a back, home or recents gesture. Without that, a ring appeared every time you

@@ -48,13 +48,25 @@ class MagnifierActivity : ComponentActivity() {
 
     private var shutterSound: MediaActionSound? = null
 
+    /** The screen-wide blink; the ring alone sits under the finger and cannot be seen. */
+    private lateinit var captureFlash: CaptureFlash
+
     /** Logged once, the first time a touch asks, purely so the values are diagnosable. */
     private var loggedGestureInsets = false
 
     private var engine: CameraEngine? = null
     private var started = false
     private var askedThisResume = false
-    private var pendingSwitchFade = false
+
+    /**
+     * Who put the held frame on screen. Both the lens-change dissolve and the capture cue use
+     * [freezeFrame], and each must only clear its own: the preview-stream observer would
+     * otherwise wipe a capture freeze the instant frames resumed, and the capture timer would
+     * cut a lens change short.
+     */
+    private var freezeReason = FreezeReason.NONE
+
+    private enum class FreezeReason { NONE, LENS_SWITCH, CAPTURE }
 
     private val requestCamera =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
@@ -92,10 +104,19 @@ class MagnifierActivity : ComponentActivity() {
             )
         }
 
+        captureFlash = CaptureFlash(this).apply {
+            layoutParams = FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT,
+            )
+        }
+
         val root = FrameLayout(this).apply {
             setBackgroundColor(Color.BLACK)
             addView(previewView)
             addView(freezeFrame)
+            // Above the held frame, so the blink washes over what was captured.
+            addView(captureFlash)
             // Topmost, so the ring is never hidden behind a lens-change dissolve.
             addView(shutterTarget)
         }
@@ -106,8 +127,12 @@ class MagnifierActivity : ComponentActivity() {
 
         // Drop the held frame the moment real frames are flowing again.
         previewView.previewStreamState.observe(this) { state ->
-            if (pendingSwitchFade && state == PreviewView.StreamState.STREAMING) {
-                pendingSwitchFade = false
+            // Only a lens change waits on frames resuming. A capture freeze is deliberately
+            // holding a still image while the camera keeps streaming underneath it.
+            if (freezeReason == FreezeReason.LENS_SWITCH &&
+                state == PreviewView.StreamState.STREAMING
+            ) {
+                freezeReason = FreezeReason.NONE
                 fadeOutFreezeFrame()
             }
         }
@@ -130,6 +155,8 @@ class MagnifierActivity : ComponentActivity() {
         engine = null
         started = false
         shutterTarget.dismiss()
+        captureFlash.cancel()
+        freezeReason = FreezeReason.NONE
     }
 
     override fun onDestroy() {
@@ -159,10 +186,20 @@ class MagnifierActivity : ComponentActivity() {
             if (shutterTarget.isArmedAt(ev.x, ev.y)) {
                 // Fire on the way down. At 5x the tap itself shakes the frame, so the delay
                 // between contact and shutter is blur we can simply decline to add.
-                shutterTarget.flashAndDismiss()
-                confirmHaptic()
-                Telemetry.logLine("shutter fired")
+                // Ordered cheapest-and-most-urgent first, all on the main thread.
+                //
+                // takeSnapshot leads because it is shake-critical: the tap is already moving
+                // the phone, and every millisecond before the shutter is blur. The blink
+                // follows because it starts an animation clock and is nearly free. The
+                // bitmap copy behind the freeze is the one expensive call here, so it goes
+                // last, once everything the user can perceive is already under way.
                 engine?.takeSnapshot(::onSnapshotSaved)
+                captureFlash.blink()
+                shutterSound?.play(MediaActionSound.SHUTTER_CLICK)
+                confirmHaptic()
+                shutterTarget.flashAndDismiss()
+                Telemetry.logLine("shutter fired")
+                freezeCapturedFrame()
             } else {
                 // A miss re-arms where the finger landed rather than doing nothing. Making
                 // someone start over for an imprecise tap would be a poor trade in an app
@@ -208,14 +245,35 @@ class MagnifierActivity : ComponentActivity() {
             y > root.height - maxOf(insets.bottom.toFloat(), floor)
     }
 
+    /**
+     * Hold the captured frame on screen so the image visibly stops dead.
+     *
+     * This is the strongest part of the cue, and it is nearly free: the bitmap is grabbed in
+     * the same touch handler that fires the capture, so what freezes on screen is the frame
+     * being written. A whole screen ceasing to move cannot be hidden behind a fingertip, which
+     * is exactly how the ring's own pulse failed.
+     */
+    private fun freezeCapturedFrame() {
+        val frame = previewView.bitmap ?: return
+        freezeReason = FreezeReason.CAPTURE
+        freezeFrame.setImageBitmap(frame)
+        freezeFrame.alpha = 1f
+        freezeFrame.visibility = ImageView.VISIBLE
+        freezeFrame.postDelayed({
+            if (freezeReason == FreezeReason.CAPTURE) {
+                freezeReason = FreezeReason.NONE
+                fadeOutFreezeFrame()
+            }
+        }, CAPTURE_HOLD_MS)
+    }
+
     private fun onSnapshotSaved(uri: Uri?) {
-        if (uri != null) {
-            shutterSound?.play(MediaActionSound.SHUTTER_CLICK)
-        } else {
-            // Nowhere to report a failure to, so the silence is the message: no click means
-            // nothing was saved.
-            Telemetry.logLine("shutter fired but nothing was saved")
-        }
+        if (uri != null) return
+        // The click and the blink have already fired, so success and failure would look
+        // identical without this. Slower and black-only, so it cannot be misread as the
+        // confirming blink.
+        Telemetry.logLine("shutter fired but nothing was saved")
+        captureFlash.failureBlink()
     }
 
     private fun confirmHaptic() {
@@ -268,14 +326,14 @@ class MagnifierActivity : ComponentActivity() {
             freezeFrame.setImageBitmap(last)
             freezeFrame.alpha = 1f
             freezeFrame.visibility = ImageView.VISIBLE
-            pendingSwitchFade = true
+            freezeReason = FreezeReason.LENS_SWITCH
         }
         rebind()
         // Belt and braces: if the stream state never reports STREAMING (some devices go
         // straight back without a transition) make sure the held frame still clears.
         freezeFrame.postDelayed({
-            if (pendingSwitchFade) {
-                pendingSwitchFade = false
+            if (freezeReason == FreezeReason.LENS_SWITCH) {
+                freezeReason = FreezeReason.NONE
                 fadeOutFreezeFrame()
             }
         }, FREEZE_TIMEOUT_MS)
@@ -316,6 +374,9 @@ class MagnifierActivity : ComponentActivity() {
          * since the ring can be summoned anywhere in the remainder.
          */
         const val EDGE_FLOOR_DP = 28f
+
+        /** How long the captured frame is held before live resumes. */
+        const val CAPTURE_HOLD_MS = 350L
 
         const val CROSSFADE_MS = 180L
         const val FREEZE_TIMEOUT_MS = 900L
